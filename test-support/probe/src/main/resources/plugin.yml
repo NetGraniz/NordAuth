@@ -1,0 +1,8 @@
+name: NordAuthTestProbe
+version: '1.0'
+main: dev.nordfjell.tests.AuthTestProbe
+api-version: '1.21.11'
+depend: [NordAuth]
+commands:
+  natestdisable:
+    description: Local integration fixture only; disables NordAuth to test fail-closed shutdown.

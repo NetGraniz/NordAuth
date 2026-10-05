@@ -1,0 +1,46 @@
+database:
+  # Relative to the Paper server directory.
+  file: plugins/NordAuth/authme.db
+  table: authme
+  # One database worker, a bounded waiting queue, and expiration before execution.
+  maximum-queued-requests: 128
+  maximum-queue-wait-millis: 10000
+
+security:
+  minimum-password-length: 5
+  maximum-password-length: 64
+  login-timeout-seconds: 60
+  reminder-interval-seconds: 5
+  maximum-failed-attempts: 5
+  lockout-seconds: 60
+
+messages:
+  loading: '<gray>Checking your account...</gray>'
+  login-prompt: '<gold>Please log in with <white>/login \<password></white>.</gold>'
+  register-prompt: '<gold>Please register with <white>/register \<password> \<password></white>.</gold>'
+  login-usage: '<red>Usage: /login \<password></red>'
+  register-usage: '<red>Usage: /register \<password> \<password></red>'
+  change-password-usage: '<red>Usage: /changepassword \<oldPassword> \<newPassword></red>'
+  reset-password-usage: '<red>Usage: /resetpassword \<player> \<newPassword></red>'
+  no-permission: '<red>You do not have permission to use this command.</red>'
+  passwords-do-not-match: '<red>The passwords do not match.</red>'
+  password-too-short: '<red>The password must contain at least <minimum> characters.</red>'
+  password-too-long: '<red>The password must contain no more than <maximum> characters.</red>'
+  already-registered: '<red>This account is already registered. Use /login.</red>'
+  not-registered: '<red>This account is not registered. Use /register.</red>'
+  already-authenticated: '<gray>You are already logged in.</gray>'
+  authentication-required: '<red>You must log in first.</red>'
+  authentication-in-progress: '<gray>Please wait...</gray>'
+  login-success: '<green>Successfully logged in.</green>'
+  register-success: '<green>Account registered successfully.</green>'
+  invalid-password: '<red>Incorrect password. <remaining> attempts remaining.</red>'
+  locked: '<red>Too many failed attempts. Try again in <seconds> seconds.</red>'
+  current-password-incorrect: '<red>Your current password is incorrect.</red>'
+  password-changed: '<green>Your password has been changed.</green>'
+  account-not-found: '<red>Account <player> was not found.</red>'
+  password-reset: '<green>Password for <player> has been reset.</green>'
+  database-error: '<red>Authentication is temporarily unavailable. Please try again later.</red>'
+  login-timeout: '<red>Login timed out.</red>'
+  blocked-action: '<red>You must authenticate before doing that.</red>'
+  # Add your own public welcome messages; no server links are bundled.
+  welcome: []

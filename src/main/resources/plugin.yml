@@ -1,0 +1,26 @@
+name: NordAuth
+version: '1.2.2'
+main: dev.nordfjell.auth.NordAuthPlugin
+api-version: '1.21.11'
+authors: [Nord Fjell]
+description: Minimal password authentication for Nord Fjell.
+libraries:
+  - org.xerial:sqlite-jdbc:3.49.1.0
+commands:
+  login:
+    description: Log in to your account.
+    usage: /login <password>
+  register:
+    description: Register your account.
+    usage: /register <password> <password>
+  changepassword:
+    description: Change your account password.
+    usage: /changepassword <oldPassword> <newPassword>
+  resetpassword:
+    description: Reset an account password.
+    usage: /resetpassword <player> <newPassword>
+    permission: nordauth.admin.resetpassword
+permissions:
+  nordauth.admin.resetpassword:
+    description: Allows resetting another account's password.
+    default: false
