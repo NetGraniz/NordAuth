@@ -28,7 +28,7 @@ class MessageFormatTest {
         ClickEvent event = findClickEvent(component);
         assertNotNull(event);
         assertEquals(ClickEvent.Action.OPEN_URL, event.action());
-        assertEquals("https://example.com", event.value());
+        assertEquals(ClickEvent.openUrl("https://example.com"), event);
     }
 
     private static ClickEvent findClickEvent(Component component) {

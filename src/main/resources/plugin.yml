@@ -1,5 +1,5 @@
 name: NordAuth
-version: '1.2.2'
+version: '${project.version}'
 main: dev.nordfjell.auth.NordAuthPlugin
 api-version: '1.21.11'
 authors: [Nord Fjell]

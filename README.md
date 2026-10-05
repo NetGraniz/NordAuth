@@ -1,5 +1,8 @@
 # NordAuth
 
+> Release build and installation requirements: see [BUILDING.md](BUILDING.md).
+> Older local paths below describe historical test fixtures, not the release build.
+
 NordAuth is the private, Paper-only password authentication plugin for Nord Fjell.
 
 It intentionally supports only:
