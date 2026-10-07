@@ -2,6 +2,7 @@ name: NordAuth
 version: '${project.version}'
 main: dev.nordfjell.auth.NordAuthPlugin
 api-version: '1.21.11'
+folia-supported: true
 authors: [Nord Fjell]
 description: Minimal password authentication for Nord Fjell.
 libraries:

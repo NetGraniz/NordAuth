@@ -8,11 +8,13 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scheduler.BukkitTask;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.apache.logging.log4j.LogManager;
 
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.List;
+import java.util.HashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -35,8 +37,8 @@ public final class NordAuthPlugin extends JavaPlugin {
 
     private final Map<UUID, AuthState> states = new ConcurrentHashMap<>();
     private final AuthSessions<Player> sessions = new AuthSessions<>();
-    private final Map<UUID, BukkitTask> reminderTasks = new ConcurrentHashMap<>();
-    private final Map<UUID, BukkitTask> timeoutTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, ScheduledTask> reminderTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, ScheduledTask> timeoutTasks = new ConcurrentHashMap<>();
     private final Map<String, LoginFailure> failures = new ConcurrentHashMap<>();
     private final Set<UUID> passwordChanges = ConcurrentHashMap.newKeySet();
     private final MiniMessage miniMessage = MiniMessage.miniMessage();
@@ -46,6 +48,8 @@ public final class NordAuthPlugin extends JavaPlugin {
     private AuthRepository repository;
     private volatile boolean authenticationAvailable;
     private volatile Component unavailableMessage = Component.text("Authentication is temporarily unavailable.");
+    private Map<String, String> messageTemplates = Map.of();
+    private List<Component> welcomeMessages = List.of();
     private int databaseQueueCapacity;
     private long maximumQueueWaitNanos;
     private int minimumPasswordLength;
@@ -78,13 +82,14 @@ public final class NordAuthPlugin extends JavaPlugin {
             registerCommand("changepassword", authCommand);
             registerCommand("resetpassword", authCommand);
             authenticationAvailable = true;
-            Bukkit.getOnlinePlayers().forEach(this::beginAuthentication);
+            Bukkit.getOnlinePlayers().forEach(player -> runOnOwner(player, () -> beginAuthentication(player)));
             getLogger().info("NordAuth enabled with AuthMe-compatible SQLite storage and no telemetry.");
         } catch (Exception | LinkageError exception) {
             authenticationAvailable = false;
-            getLogger().severe("NordAuth initialization failed; stopping Paper to prevent unauthenticated access. "
+            getLogger().severe("NordAuth initialization failed; stopping server to prevent unauthenticated access. "
                 + exception.getClass().getSimpleName());
-            Bukkit.getOnlinePlayers().forEach(player -> player.kick(unavailableMessage));
+            // The closed pre-login gate remains active until shutdown; never kick
+            // players directly from Folia's startup/global thread.
             getServer().shutdown();
         }
     }
@@ -95,11 +100,11 @@ public final class NordAuthPlugin extends JavaPlugin {
         sessions.clear();
         // Manual disabling/reloading must not leave an offline-mode server unprotected.
         if (!getServer().isStopping()) {
-            getLogger().severe("NordAuth was disabled while Paper was running; stopping Paper for safety.");
+            getLogger().severe("NordAuth was disabled while the server was running; stopping server for safety.");
             getServer().shutdown();
         }
-        reminderTasks.values().forEach(BukkitTask::cancel);
-        timeoutTasks.values().forEach(BukkitTask::cancel);
+        reminderTasks.values().forEach(ScheduledTask::cancel);
+        timeoutTasks.values().forEach(ScheduledTask::cancel);
         reminderTasks.clear();
         timeoutTasks.clear();
         states.clear();
@@ -142,7 +147,10 @@ public final class NordAuthPlugin extends JavaPlugin {
     }
 
     void endAuthentication(Player player) {
-        UUID playerId = player.getUniqueId();
+        endAuthentication(player.getUniqueId(), player);
+    }
+
+    private void endAuthentication(UUID playerId, Player player) {
         if (!sessions.end(playerId, player)) return;
         states.remove(playerId);
         passwordChanges.remove(playerId);
@@ -276,7 +284,11 @@ public final class NordAuthPlugin extends JavaPlugin {
     }
 
     void send(CommandSender player, String path, String... replacements) {
-        String raw = getConfig().getString(path, "<red>Missing message: " + path + "</red>");
+        if (player instanceof Player owner && !Bukkit.isOwnedByCurrentRegion(owner)) {
+            runOnOwner(owner, () -> send(owner, path, replacements));
+            return;
+        }
+        String raw = messageTemplates.getOrDefault(path, "<red>Missing message: " + path + "</red>");
         for (int index = 0; index + 1 < replacements.length; index += 2) {
             raw = raw.replace(replacements[index], replacements[index + 1]);
         }
@@ -289,8 +301,7 @@ public final class NordAuthPlugin extends JavaPlugin {
         cancelTask(timeoutTasks.remove(player.getUniqueId()));
         player.updateCommands();
         send(player, successMessage);
-        for (String line : getConfig().getStringList("messages.welcome")) {
-            Component message = miniMessage.deserialize(line);
+        for (Component message : welcomeMessages) {
             player.sendMessage(message);
         }
     }
@@ -332,14 +343,22 @@ public final class NordAuthPlugin extends JavaPlugin {
     private void startTimers(Player player) {
         UUID playerId = player.getUniqueId();
         long reminderTicks = Math.max(1, reminderIntervalSeconds) * 20L;
-        reminderTasks.put(playerId, Bukkit.getScheduler().runTaskTimer(this, () -> {
+        Runnable retired = () -> endAuthentication(playerId, player);
+        ScheduledTask reminder = player.getScheduler().runAtFixedRate(this, ignored -> {
             if (isCurrent(player) && !isAuthenticated(player)) sendPrompt(player);
-        }, reminderTicks, reminderTicks));
-        timeoutTasks.put(playerId, Bukkit.getScheduler().runTaskLater(this, () -> {
+        }, retired, reminderTicks, reminderTicks);
+        if (reminder == null) {
+            endAuthentication(playerId, player);
+            return;
+        }
+        reminderTasks.put(playerId, reminder);
+        ScheduledTask timeout = player.getScheduler().runDelayed(this, ignored -> {
             if (isCurrent(player) && !isAuthenticated(player)) {
-                player.kick(miniMessage.deserialize(getConfig().getString("messages.login-timeout", "<red>Login timed out.</red>")));
+                player.kick(miniMessage.deserialize(messageTemplates.getOrDefault("messages.login-timeout", "<red>Login timed out.</red>")));
             }
-        }, Math.max(1, loginTimeoutSeconds) * 20L));
+        }, retired, Math.max(1, loginTimeoutSeconds) * 20L);
+        if (timeout == null) endAuthentication(playerId, player);
+        else timeoutTasks.put(playerId, timeout);
     }
 
     private void sendPrompt(Player player) {
@@ -363,14 +382,14 @@ public final class NordAuthPlugin extends JavaPlugin {
                         throw new TimeoutException("Authentication request expired in queue");
                     }
                     T result = operation.run();
-                    runOnMainThread(() -> {
+                    runOnOwner(player, () -> {
                         if (isCurrent(session, expectedState)) callback.accept(result);
                     });
                 } catch (Exception exception) {
                     // Do not log exception text: a driver or callback may include credentials.
                     getLogger().severe("Authentication database operation failed: "
                         + exception.getClass().getSimpleName());
-                    runOnMainThread(() -> {
+                    runOnOwner(player, () -> {
                         if (isCurrent(session, expectedState)) player.kick(unavailableMessage);
                     });
                 }
@@ -401,7 +420,7 @@ public final class NordAuthPlugin extends JavaPlugin {
                         throw new TimeoutException("Administrative request expired in queue");
                     }
                     T result = operation.run();
-                    runOnMainThread(() -> {
+                    runOnOwner(sender, () -> {
                         if (!(sender instanceof Player) || isCurrent(session, AuthState.AUTHENTICATED)) {
                             callback.accept(result);
                         }
@@ -409,7 +428,7 @@ public final class NordAuthPlugin extends JavaPlugin {
                 } catch (Exception exception) {
                     getLogger().severe("Administrative database operation failed: "
                         + exception.getClass().getSimpleName());
-                    runOnMainThread(() -> {
+                    runOnOwner(sender, () -> {
                         if (!(sender instanceof Player) || isCurrent(session, AuthState.AUTHENTICATED)) {
                             send(sender, "messages.database-error");
                         }
@@ -421,12 +440,17 @@ public final class NordAuthPlugin extends JavaPlugin {
         }
     }
 
-    private void runOnMainThread(Runnable action) {
+    private void runOnOwner(CommandSender owner, Runnable action) {
         if (authenticationAvailable && isEnabled()) {
             try {
-                Bukkit.getScheduler().runTask(this, () -> {
+                Runnable guarded = () -> {
                     if (authenticationAvailable) action.run();
-                });
+                };
+                if (owner instanceof Player player) {
+                    player.getScheduler().execute(this, guarded, null, 1L);
+                } else {
+                    Bukkit.getGlobalRegionScheduler().execute(this, guarded);
+                }
             } catch (org.bukkit.plugin.IllegalPluginAccessException ignored) {
                 // Shutdown may disable this plugin between the availability check and scheduling.
             }
@@ -440,12 +464,18 @@ public final class NordAuthPlugin extends JavaPlugin {
 
     private boolean isCurrent(AuthSessions.Session<Player> session, AuthState expectedState) {
         return authenticationAvailable && sessions.isCurrent(session) && session.owner().isOnline()
-            && Bukkit.getPlayer(session.playerId()) == session.owner()
             && states.get(session.playerId()) == expectedState;
     }
 
     private void loadSettings() {
         FileConfiguration config = getConfig();
+        Map<String, String> templates = new HashMap<>();
+        var messages = config.getConfigurationSection("messages");
+        if (messages != null) messages.getValues(true).forEach((key, value) -> {
+            if (value instanceof String text) templates.put("messages." + key, text);
+        });
+        messageTemplates = Map.copyOf(templates);
+        welcomeMessages = config.getStringList("messages.welcome").stream().map(miniMessage::deserialize).toList();
         databaseQueueCapacity = Math.clamp(config.getInt("database.maximum-queued-requests", 128), 1, 4096);
         maximumQueueWaitNanos = TimeUnit.MILLISECONDS.toNanos(
             Math.clamp(config.getLong("database.maximum-queue-wait-millis", 10000), 1L, 60000L));
@@ -489,7 +519,7 @@ public final class NordAuthPlugin extends JavaPlugin {
         commandLogFilter = null;
     }
 
-    private static void cancelTask(BukkitTask task) {
+    private static void cancelTask(ScheduledTask task) {
         if (task != null) task.cancel();
     }
 }

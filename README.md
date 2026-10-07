@@ -3,7 +3,8 @@
 > Release build and installation requirements: see [BUILDING.md](BUILDING.md).
 > Older local paths below describe historical test fixtures, not the release build.
 
-NordAuth is the private, Paper-only password authentication plugin for Nord Fjell.
+NordAuth is a Paper/Folia password authentication plugin for Nord Fjell.
+The same release JAR supports both platforms; development stays on `main`.
 
 It intentionally supports only:
 
@@ -24,13 +25,24 @@ https://github.com/AuthMe/AuthMeReloaded
 ## Safe migration
 
 1. Build and test NordAuth away from the production server.
-2. Stop the production Paper server before replacing authentication plugins.
+2. Stop the production server before replacing authentication plugins.
 3. Back up `plugins/AuthMe/authme.db` and the complete `plugins/AuthMe` directory.
 4. Remove the AuthMe jar, add the NordAuth jar, and copy the database to
    `plugins/NordAuth/authme.db`.
-5. Start Paper and test an existing account before opening the server to players.
+5. Start the server and test an existing account before opening it to players.
 
 Never run AuthMe and NordAuth against the same SQLite database at the same time.
+
+## 1.3.0 Paper and Folia support
+
+- Database results, authentication reminders and timeout kicks use the player's
+  entity scheduler. Console callbacks use the global scheduler.
+- Chat restriction responses are routed back to the player's owning region.
+- Connection identity and expected-state checks still reject stale database callbacks.
+- Message templates are copied at startup instead of reading mutable configuration
+  from different regions. The database schema and password format are unchanged.
+- Keep the existing configuration and database. No migration or password reset is
+  required by this update. Do not disable or hot-reload NordAuth on a live server.
 
 ## 1.2.2 security fixes
 
@@ -59,11 +71,10 @@ loaded and that login restrictions work. Fix startup errors before allowing auto
 Run `mvn package` in this project. The tests gated by the `authme.db` system property are skipped
 by default; do not pass a production database path. Tests use temporary synthetic databases.
 
-The integration fixture sources are in `test-support`; **all source and build artifacts remain
-on the network drive**. The runtime fixture used for verification was the local directory
-`C:\Users\artyo\Documents\Codex\nordauth-test-20261003`. Only Paper's executable files,
-libraries, cache and the existing accepted EULA were copied; no production world, accounts,
-proxy secrets or operational configuration was copied.
+Integration sources are in `test-support` in the working Git repository. Use a new,
+isolated local `C:\Users\artyo\Documents\Codex\nordauth-test-...` fixture with a `server`
+subdirectory. Copy only the selected platform's server executable, cache and an
+already accepted EULA; never copy production worlds, accounts or operational configuration.
 
 The local `server.properties` must bind to `127.0.0.1:25585`, use offline mode, disable RCON/query,
 and use its own small world. The harness deliberately uses a queue of one waiting request to
@@ -73,18 +84,23 @@ Build `test-support/probe/pom.xml` separately and put its JAR **only on the loca
 alongside NordAuth. The probe has a console-only command to exercise manual plugin disabling.
 Never install `NordAuthTestProbe` on production.
 
-The test client's dependencies match the pinned `NordLoadTest` package and lock file, installed
-in the local fixture's `clients` directory. Prepare the existing Mineflayer fork's 26.2 metadata
-with `node node_modules/mineflayer/tools/install-minecraft-data-26.2.mjs` in that directory.
-Set `NODE_PATH` to its `node_modules` and run:
+The test client's dependencies match the pinned `NordLoadTest` package and lock file.
+Use its installed dependencies with prepared 26.2 metadata; set `NODE_PATH` to that
+`node_modules`. Pass the fixture path, Java executable, Python executable and platform:
 
 ```powershell
-node 'Z:\Minecraft Plagins\NordAuth\test-support\integration.cjs' `
-  'C:\Users\artyo\Documents\Codex\nordauth-test-20261003' `
-  'C:\Program Files\Java\jdk-25\bin\java.exe' `
-  'C:\Users\artyo\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+node ./test-support/integration.cjs $FixturePath $JavaExecutable $PythonExecutable Folia
+# Run separately with a fresh Paper fixture and the last argument Paper.
+# Afterwards, run the additional administrative tests on each isolated fixture:
+node ./test-support/integration.cjs $FixturePath $JavaExecutable $PythonExecutable Folia admin-only
 ```
 
 The harness uses hidden child processes, enforces a local fixture path, creates no external
 listener, stops its servers on completion, and leaves a JSON result in the local fixture.
 It is a functional/security regression suite, not proof of capacity for 1000 connections.
+
+The test-only probe grants the password-reset permission to the fixture console;
+`natestgrant` grants that same permission to an isolated bot. Production permissions
+are unchanged (`nordauth.admin.resetpassword` still requires an explicit grant).
+Verify that permission before entering a password in a console command: Minecraft
+may echo rejected/unknown console commands in parser diagnostics.

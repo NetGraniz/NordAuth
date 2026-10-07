@@ -10,6 +10,8 @@ const mineflayer = require('mineflayer')
 const root = path.resolve(process.argv[2] || '')
 const java = process.argv[3]
 const python = process.argv[4]
+const platform = process.argv[5] || 'Paper'
+assert(['Paper', 'Folia'].includes(platform), 'Test platform must be Paper or Folia')
 assert(root.startsWith('C:\\Users\\artyo\\Documents\\Codex\\nordauth-test-'))
 assert(java && python, 'Pass Java and Python executable paths')
 const serverDir = path.join(root, 'server')
@@ -36,16 +38,18 @@ function pass(description) {
   console.log('PASS: ' + description)
 }
 
-async function startServer({ queueWait = 10000, badDatabase = false } = {}) {
+async function startServer({ queueWait = 10000, badDatabase = false, loginTimeout = 60 } = {}) {
   fs.mkdirSync(path.dirname(configPath), { recursive: true })
   let config = baseConfig.replace('maximum-queued-requests: 128', 'maximum-queued-requests: 1')
     .replace('maximum-queue-wait-millis: 10000', 'maximum-queue-wait-millis: ' + queueWait)
+    .replace('login-timeout-seconds: 60', 'login-timeout-seconds: ' + loginTimeout)
+    .replace('reminder-interval-seconds: 5', 'reminder-interval-seconds: 1')
   if (badDatabase) {
     fs.mkdirSync(path.join(serverDir, 'not-a-database'), { recursive: true })
     config = config.replace('file: plugins/NordAuth/authme.db', 'file: not-a-database')
   }
   fs.writeFileSync(configPath, config)
-  const child = spawn(java, ['-Xms512M', '-Xmx2G', '-jar', 'server.jar', 'nogui'], {
+  const child = spawn(java, ['-Dterminal.jline=false', '-Dterminal.ansi=false', '-Xms256M', '-Xmx1200M', '-jar', 'server.jar', 'nogui'], {
     cwd: serverDir, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
   })
   server = { child, output: '', exited: false, code: null }
@@ -56,16 +60,17 @@ async function startServer({ queueWait = 10000, badDatabase = false } = {}) {
   child.on('error', e => { instance.output += String(e); instance.exited = true })
   if (badDatabase) {
     await until(() => instance.exited, 'failed initialization shuts down Paper', 90000)
-    assert.match(instance.output, /NordAuth initialization failed; stopping Paper/)
+    assert.match(instance.output, /NordAuth initialization failed; stopping server/)
     assert.match(instance.output, /Stopping server/)
-    pass('Database initialization failure stops Paper instead of disabling authentication')
+    pass('Database initialization failure stops the server instead of disabling authentication')
     return
   }
   await until(() => /Done \(/.test(instance.output) || instance.exited, 'Paper startup', 120000)
   assert(!instance.exited, instance.output.slice(-4000))
   assert.match(instance.output, /NordAuth enabled with AuthMe-compatible SQLite storage/)
+  assert.match(instance.output, new RegExp('Loading ' + platform + ' 26\\.2'))
   assert.match(instance.output, /Starting Minecraft server on 127\.0\.0\.1:25585/)
-  console.log('LOCAL Paper ready, PID ' + child.pid)
+  console.log('LOCAL ' + platform + ' ready, PID ' + child.pid)
 }
 
 async function stopServer() {
@@ -135,10 +140,39 @@ async function releaseLock() {
 }
 
 async function main() {
+  if (process.argv[6] === 'admin-only') {
+    await startServer()
+    let admin = await account('NASecurityAdmin', 'TestAdminInitial29')
+    const mark = server.output.length
+    server.child.stdin.write('resetpassword ' + admin.username + ' TestAdminConsole29\n')
+    await until(() => server.output.slice(mark).includes('was reset by'), 'console reset callback')
+    await disconnect(admin)
+    admin = connect('NASecurityAdmin')
+    await message(admin, /Please log in/)
+    await command(admin, '/login TestAdminInitial29', /Incorrect password/)
+    await command(admin, '/login TestAdminConsole29', /Successfully logged in/)
+    pass('Console password reset returns through the global scheduler and preserves verification')
+    const opMark = server.output.length
+    server.child.stdin.write('natestgrant ' + admin.username + '\n')
+    await until(() => server.output.slice(opMark).includes('NORD_AUTH_TEST_PERMISSION_GRANTED ' + admin.username),
+      'synthetic admin permission')
+    await command(admin, '/resetpassword ' + admin.username + ' TestAdminPlayer29', /has been reset/)
+    await disconnect(admin)
+    admin = connect('NASecurityAdmin')
+    await message(admin, /Please log in/)
+    await command(admin, '/login TestAdminPlayer29', /Successfully logged in/)
+    pass('Player admin password reset returns to its entity scheduler')
+    await stopServer()
+    const log = fs.readFileSync(path.join(serverDir, 'logs', 'latest.log'), 'utf8')
+    assert(!/TestAdminInitial29|TestAdminConsole29|TestAdminPlayer29/.test(log), 'Admin test passwords leaked')
+    pass('Administrative test passwords are absent from the server log')
+    return
+  }
   await startServer()
   let basic = connect('NASecurityBasic')
   await message(basic, /Please register/)
   await command(basic, '/help', /You must log in first/)
+  await command(basic, 'Synthetic unauthenticated chat', /You must log in first/)
   await command(basic, '/register TestInitial29 TestInitial29', /Account registered successfully/)
   await command(basic, '/changepassword TestInitial29 TestChanged29', /password has been changed/)
   await disconnect(basic)
@@ -208,7 +242,7 @@ async function main() {
   const firstLog = fs.readFileSync(path.join(serverDir, 'logs', 'latest.log'), 'utf8')
   assert(!/TestInitial29|TestChanged29|TestAfterQueue29|TestQueue29|TestQueueChanged29/.test(firstLog),
     'Synthetic passwords must not leak to server logs')
-  pass('Authentication commands do not leak test passwords into the Paper log')
+  pass('Authentication commands do not leak test passwords into the server log')
 
   await startServer({ queueWait: 1000 })
   await acquireLock()
@@ -224,18 +258,26 @@ async function main() {
   assert.match(expired.kicked || '', /Authentication is temporarily unavailable/)
   pass('Expired queued database request is rejected before execution')
   await stopServer()
-  await startServer()
+  await startServer({ loginTimeout: 3 })
+  const timedOut = connect('NASecurityTimeout')
+  await message(timedOut, /Please register/)
+  await until(() => timedOut.ended, 'entity-owned login timeout', 15000)
+  assert.match(timedOut.kicked || '', /Login timed out/)
+  assert(timedOut.messages.filter(m => /Please register/.test(m)).length >= 2,
+    'Entity-owned reminders must run before the timeout')
+  pass('Entity-owned authentication reminders and login timeout work')
   server.child.stdin.write('natestdisable\n')
   await until(() => server.exited, 'disabling NordAuth stops Paper', 45000)
-  assert.match(server.output, /NordAuth was disabled while Paper was running; stopping Paper for safety/)
-  pass('Manually disabling NordAuth also shuts Paper down safely')
+  assert.match(server.output, /NordAuth was disabled while the server was running; stopping server for safety/)
+  pass('Manually disabling NordAuth also shuts the server down safely')
   await startServer({ badDatabase: true })
 }
 
 main().then(() => {
-  const report = { passed: results, total: results.length, server: 'Paper 26.2',
+  const report = { passed: results, total: results.length, server: platform + ' 26.2',
     fixture: '127.0.0.1:25585, synthetic accounts only' }
-  fs.writeFileSync(path.join(root, 'integration-results.json'), JSON.stringify(report, null, 2))
+  fs.writeFileSync(path.join(root, process.argv[6] === 'admin-only'
+    ? 'admin-integration-results.json' : 'integration-results.json'), JSON.stringify(report, null, 2))
   console.log('ALL ' + results.length + ' LOCAL INTEGRATION SCENARIOS PASSED')
 }).catch(async error => {
   console.error(error.stack)

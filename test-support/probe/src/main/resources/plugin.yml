@@ -2,7 +2,10 @@ name: NordAuthTestProbe
 version: '1.0'
 main: dev.nordfjell.tests.AuthTestProbe
 api-version: '1.21.11'
+folia-supported: true
 depend: [NordAuth]
 commands:
+  natestgrant:
+    description: Local fixture only; grants the isolated bot the password reset permission.
   natestdisable:
     description: Local integration fixture only; disables NordAuth to test fail-closed shutdown.
