@@ -11,6 +11,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.apache.logging.log4j.LogManager;
 
+import java.net.InetAddress;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.List;
@@ -43,11 +44,13 @@ public final class NordAuthPlugin extends JavaPlugin {
     private final Set<UUID> passwordChanges = ConcurrentHashMap.newKeySet();
     private final MiniMessage miniMessage = MiniMessage.miniMessage();
     private final PasswordHasher passwordHasher = new PasswordHasher();
+    private final IpConnectionLimiter connectionLimiter = new IpConnectionLimiter(TimeUnit.SECONDS.toMillis(30));
 
     private ExecutorService databaseExecutor;
     private AuthRepository repository;
     private volatile boolean authenticationAvailable;
     private volatile Component unavailableMessage = Component.text("Authentication is temporarily unavailable.");
+    private volatile Component connectionLimitMessage = Component.text("Too many players are connected from this address.");
     private Map<String, String> messageTemplates = Map.of();
     private List<Component> welcomeMessages = List.of();
     private int databaseQueueCapacity;
@@ -58,6 +61,7 @@ public final class NordAuthPlugin extends JavaPlugin {
     private int lockoutSeconds;
     private int loginTimeoutSeconds;
     private int reminderIntervalSeconds;
+    private volatile int maximumPlayersPerIp;
     private SensitiveCommandFilter commandLogFilter;
     private SensitiveLog4jFilter log4jCommandFilter;
 
@@ -82,7 +86,12 @@ public final class NordAuthPlugin extends JavaPlugin {
             registerCommand("changepassword", authCommand);
             registerCommand("resetpassword", authCommand);
             authenticationAvailable = true;
-            Bukkit.getOnlinePlayers().forEach(player -> runOnOwner(player, () -> beginAuthentication(player)));
+            Bukkit.getOnlinePlayers().forEach(player -> runOnOwner(player, () -> {
+                if (player.getAddress() != null) {
+                    connectionLimiter.addActive(player.getUniqueId(), player.getAddress().getAddress());
+                }
+                beginAuthentication(player);
+            }));
             getLogger().info("NordAuth enabled with AuthMe-compatible SQLite storage and no telemetry.");
         } catch (Exception | LinkageError exception) {
             authenticationAvailable = false;
@@ -109,6 +118,7 @@ public final class NordAuthPlugin extends JavaPlugin {
         timeoutTasks.clear();
         states.clear();
         passwordChanges.clear();
+        connectionLimiter.clear();
         restoreCommandLogFilter();
 
         if (databaseExecutor != null) {
@@ -161,6 +171,22 @@ public final class NordAuthPlugin extends JavaPlugin {
     boolean isAuthenticated(Player player) {
         return authenticationAvailable && sessions.find(player.getUniqueId(), player) != null
             && states.get(player.getUniqueId()) == AuthState.AUTHENTICATED;
+    }
+
+    boolean reserveConnection(UUID playerId, InetAddress address) {
+        return connectionLimiter.tryReserve(playerId, address, maximumPlayersPerIp, System.currentTimeMillis());
+    }
+
+    void activateConnection(UUID playerId) {
+        connectionLimiter.activate(playerId);
+    }
+
+    void releaseConnection(UUID playerId) {
+        connectionLimiter.release(playerId);
+    }
+
+    Component connectionLimitMessage() {
+        return connectionLimitMessage;
     }
 
     boolean isAuthenticationAvailable() {
@@ -488,6 +514,9 @@ public final class NordAuthPlugin extends JavaPlugin {
         lockoutSeconds = Math.max(1, config.getInt("security.lockout-seconds", 60));
         loginTimeoutSeconds = Math.max(1, config.getInt("security.login-timeout-seconds", 60));
         reminderIntervalSeconds = Math.max(1, config.getInt("security.reminder-interval-seconds", 5));
+        maximumPlayersPerIp = Math.clamp(config.getInt("security.maximum-players-per-ip", 3), 0, 1000);
+        connectionLimitMessage = miniMessage.deserialize(config.getString("messages.connection-limit-reached",
+            "<red>Too many players are connected from this address.</red>"));
     }
 
     private void registerCommand(String name, AuthCommand executor) {

@@ -8,7 +8,7 @@ folder, private configuration, prebuilt old plugin, or machine-specific path is 
 
 From this project's root, run `mvn clean verify`, or on PowerShell run
 `./build.ps1`. The wrapper accepts `-MavenCommand /path/to/mvn`.
-The JAR is `target/NordAuth-1.3.0.jar`, shared by Paper and Folia.
+The JAR is `target/NordAuth-1.4.0.jar`, shared by Paper and Folia.
 Existing main-based regression checks are run by the JUnit adapter with assertions enabled.
 The optional live-AuthMe compatibility tests stay disabled unless explicitly given an authme.db system property. Do not use production account data in CI.
 

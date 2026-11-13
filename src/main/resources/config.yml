@@ -13,6 +13,9 @@ security:
   reminder-interval-seconds: 5
   maximum-failed-attempts: 5
   lockout-seconds: 60
+  # Maximum simultaneous players from one IP address. Set to 0 to disable the limit.
+  # Restart the server after changing this value.
+  maximum-players-per-ip: 3
 
 messages:
   loading: '<gray>Checking your account...</gray>'
@@ -41,6 +44,7 @@ messages:
   password-reset: '<green>Password for <player> has been reset.</green>'
   database-error: '<red>Authentication is temporarily unavailable. Please try again later.</red>'
   login-timeout: '<red>Login timed out.</red>'
+  connection-limit-reached: '<red>Too many players are connected from this address.</red>'
   blocked-action: '<red>You must authenticate before doing that.</red>'
   # Add your own public welcome messages; no server links are bundled.
   welcome: []
