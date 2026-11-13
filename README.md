@@ -7,6 +7,8 @@ Password authentication for Paper 26.2 and Folia 26.2. One Java 25 JAR supports 
 `security.maximum-players-per-ip` limits simultaneous players sharing one IP address.
 The default is `3`; set it to `0` to disable the limit. Restart the server after
 changing this setting. Connections that stop before joining are released automatically.
+An excess connection completes the backend join and is immediately kicked before
+authentication starts, allowing a proxy to handle it as a real backend kick.
 
 ## Commands
 

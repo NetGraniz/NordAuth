@@ -13,7 +13,11 @@ final class IpConnectionLimiter {
         }
     }
 
+    private record Rejection(String address, long expiresAtMillis) {
+    }
+
     private final Map<UUID, Reservation> reservations = new HashMap<>();
+    private final Map<UUID, Rejection> rejections = new HashMap<>();
     private final Map<String, Integer> counts = new HashMap<>();
     private final long pendingLifetimeMillis;
 
@@ -25,11 +29,13 @@ final class IpConnectionLimiter {
     synchronized boolean tryReserve(UUID playerId, InetAddress address, int maximumPlayers, long nowMillis) {
         purgeExpired(nowMillis);
         if (maximumPlayers == 0) return true;
-        if (reservations.containsKey(playerId)) return false;
-
         String key = address.getHostAddress();
-        if (counts.getOrDefault(key, 0) >= maximumPlayers) return false;
+        if (reservations.containsKey(playerId) || counts.getOrDefault(key, 0) >= maximumPlayers) {
+            rejections.put(playerId, new Rejection(key, nowMillis + pendingLifetimeMillis));
+            return false;
+        }
 
+        rejections.remove(playerId);
         reservations.put(playerId, new Reservation(key, nowMillis + pendingLifetimeMillis, false));
         counts.merge(key, 1, Integer::sum);
         return true;
@@ -40,6 +46,15 @@ final class IpConnectionLimiter {
         if (reservation != null && !reservation.active()) {
             reservations.put(playerId, reservation.activate());
         }
+    }
+
+    synchronized boolean consumeRejection(UUID playerId, InetAddress address, long nowMillis) {
+        purgeExpired(nowMillis);
+        Rejection rejection = rejections.get(playerId);
+        if (rejection == null) return false;
+        if (address != null && !rejection.address().equals(address.getHostAddress())) return false;
+        rejections.remove(playerId);
+        return true;
     }
 
     synchronized void addActive(UUID playerId, InetAddress address) {
@@ -56,6 +71,7 @@ final class IpConnectionLimiter {
 
     synchronized void clear() {
         reservations.clear();
+        rejections.clear();
         counts.clear();
     }
 
@@ -68,6 +84,7 @@ final class IpConnectionLimiter {
                 decrement(reservation.address());
             }
         }
+        rejections.entrySet().removeIf(entry -> entry.getValue().expiresAtMillis() <= nowMillis);
     }
 
     private void decrement(String address) {

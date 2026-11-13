@@ -177,6 +177,15 @@ public final class NordAuthPlugin extends JavaPlugin {
         return connectionLimiter.tryReserve(playerId, address, maximumPlayersPerIp, System.currentTimeMillis());
     }
 
+    boolean kickIfConnectionLimitExceeded(Player player) {
+        InetAddress address = player.getAddress() == null ? null : player.getAddress().getAddress();
+        if (!connectionLimiter.consumeRejection(player.getUniqueId(), address, System.currentTimeMillis())) {
+            return false;
+        }
+        player.kick(connectionLimitMessage);
+        return true;
+    }
+
     void activateConnection(UUID playerId) {
         connectionLimiter.activate(playerId);
     }

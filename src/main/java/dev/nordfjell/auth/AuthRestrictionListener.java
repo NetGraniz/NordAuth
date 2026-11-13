@@ -56,13 +56,12 @@ final class AuthRestrictionListener implements Listener {
         if (event.getLoginResult() != AsyncPlayerPreLoginEvent.Result.ALLOWED) {
             return;
         }
-        if (!plugin.reserveConnection(event.getUniqueId(), event.getAddress())) {
-            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, plugin.connectionLimitMessage());
-        }
+        plugin.reserveConnection(event.getUniqueId(), event.getAddress());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onJoin(PlayerJoinEvent event) {
+        if (plugin.kickIfConnectionLimitExceeded(event.getPlayer())) return;
         plugin.activateConnection(event.getPlayer().getUniqueId());
         plugin.beginAuthentication(event.getPlayer());
     }
